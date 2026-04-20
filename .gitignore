@@ -1,4 +1,5 @@
 .venv/
+.packages/
 __pycache__/
 .pytest_cache/
 .mypy_cache/
@@ -9,3 +10,4 @@ __pycache__/
 .env
 storage/private/
 data/
+tmp/

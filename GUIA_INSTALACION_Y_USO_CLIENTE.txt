@@ -1,0 +1,265 @@
+GUIA DE INSTALACION Y USO PARA CLIENTE FINAL
+Microservicio de Reportes y Tareas Asincronas
+
+1. INTRODUCCION
+
+Este sistema permite solicitar reportes empresariales en formato Excel o PDF sin hacer lenta la aplicacion principal. El reporte se genera en segundo plano y luego queda disponible para descarga segura.
+
+Esta guia explica como poner en funcionamiento el proyecto y como utilizarlo de manera basica.
+
+2. QUE NECESITA EL CLIENTE PARA USARLO
+
+Antes de empezar, asegurese de contar con lo siguiente:
+
+- Docker Desktop instalado y en ejecucion.
+- Acceso a una terminal o PowerShell.
+- El codigo fuente completo del proyecto.
+- Un puerto libre para los servicios:
+  - 8000 para la API
+  - 5555 para Flower
+  - 5432 para PostgreSQL
+  - 6379 para Redis
+
+Si Docker Desktop no esta instalado, debe instalarse primero desde su fuente oficial y verificar que quede funcionando correctamente.
+
+3. ARCHIVOS IMPORTANTES DEL PROYECTO
+
+Dentro del proyecto existen algunos archivos clave:
+
+- `.env.example`
+  Contiene el ejemplo de configuracion necesaria.
+- `docker-compose.yml`
+  Permite levantar todos los servicios del sistema.
+- `README.md`
+  Documentacion tecnica general del proyecto.
+- `scripts/create_demo_token.py`
+  Genera un token de acceso de desarrollo para hacer pruebas.
+
+4. PASO A PASO PARA INSTALAR Y LEVANTAR EL PROYECTO
+
+Paso 1. Abrir la carpeta del proyecto
+
+Ubique la carpeta del proyecto y abra una terminal dentro de ella.
+
+Paso 2. Crear el archivo de configuracion
+
+Debe crear un archivo llamado `.env` tomando como base el archivo `.env.example`.
+
+En Windows PowerShell puede hacerlo con este comando:
+
+Copy-Item .env.example .env
+
+Paso 3. Revisar el archivo `.env`
+
+Abra el archivo `.env` y verifique que los valores sean correctos para su entorno.
+
+Para una ejecucion local de prueba, los valores por defecto suelen ser suficientes.
+
+Paso 4. Levantar el sistema completo
+
+Ejecute el siguiente comando:
+
+docker compose up --build
+
+Este comando iniciara:
+
+- la API del proyecto;
+- el worker que procesa reportes;
+- Redis;
+- PostgreSQL;
+- Flower.
+
+Paso 5. Esperar a que todos los servicios inicien
+
+Espere hasta que Docker termine la construccion y vea que los servicios quedan activos sin errores.
+
+Paso 6. Verificar que la API esta funcionando
+
+Abra el navegador y entre a:
+
+http://localhost:8000/health
+
+Si todo esta bien, deberia ver una respuesta indicando el estado del sistema.
+
+Paso 7. Verificar el monitor de tareas
+
+Abra:
+
+http://localhost:5555
+
+Alli podra ver Flower, que permite revisar tareas, workers y colas.
+
+5. COMO OBTENER UN TOKEN DE ACCESO PARA PRUEBAS
+
+El proyecto incluye un script para generar un token de desarrollo.
+
+Desde la raiz del proyecto ejecute:
+
+python scripts/create_demo_token.py
+
+El sistema devolvera un token. Debe copiarlo, porque ese valor sera usado para autenticar las solicitudes.
+
+Cuando use el token en llamadas HTTP, debe enviarlo asi:
+
+Authorization: Bearer SU_TOKEN_AQUI
+
+6. COMO USAR EL PROYECTO
+
+El uso normal del sistema tiene cuatro momentos:
+
+1. crear la solicitud del reporte;
+2. consultar el estado;
+3. pedir el enlace de descarga;
+4. descargar el archivo.
+
+7. PASO A PASO DE USO
+
+Paso 1. Crear una solicitud de reporte
+
+Ejecute una solicitud `POST` al endpoint:
+
+http://localhost:8000/reports
+
+Ejemplo:
+
+curl --request POST http://localhost:8000/reports ^
+  --header "Authorization: Bearer SU_TOKEN_AQUI" ^
+  --header "Content-Type: application/json" ^
+  --data "{ \"report_type\": \"sales_summary\", \"format\": \"excel\", \"filters\": { \"start_date\": \"2026-04-01\", \"end_date\": \"2026-04-15\", \"area\": \"Finanzas\", \"status\": \"closed\", \"category\": \"Q2\", \"requested_user\": \"ana\" } }"
+
+Resultado esperado:
+
+- el sistema registra la solicitud;
+- devuelve un identificador llamado `report_id`;
+- la tarea queda enviada a procesamiento asincrono.
+
+Paso 2. Consultar el estado del reporte
+
+Con el `report_id` recibido, consulte:
+
+http://localhost:8000/reports/REPORT_ID
+
+Ejemplo:
+
+curl --request GET http://localhost:8000/reports/REPORT_ID ^
+  --header "Authorization: Bearer SU_TOKEN_AQUI"
+
+Estados posibles:
+
+- `PENDING`
+  La solicitud fue registrada, pero aun no inicia el worker.
+- `STARTED`
+  El worker ya comenzo a procesar el reporte.
+- `SUCCESS`
+  El archivo fue generado correctamente.
+- `FAILURE`
+  Ocurrio un error durante el procesamiento.
+- `RETRY`
+  El sistema esta reintentando la tarea.
+- `CANCELED`
+  La solicitud fue cancelada.
+
+Paso 3. Solicitar el enlace de descarga
+
+Cuando el estado del reporte sea `SUCCESS`, solicite:
+
+http://localhost:8000/reports/REPORT_ID/download
+
+Ejemplo:
+
+curl --request GET http://localhost:8000/reports/REPORT_ID/download ^
+  --header "Authorization: Bearer SU_TOKEN_AQUI"
+
+La respuesta devolvera un enlace firmado temporal.
+
+Paso 4. Descargar el archivo final
+
+Abra el enlace firmado o ejecútelo desde la terminal manteniendo el mismo token si su flujo lo requiere.
+
+Si el reporte fue generado correctamente, recibira el archivo Excel o PDF correspondiente.
+
+8. COMO LISTAR REPORTES
+
+Para ver las solicitudes registradas:
+
+curl --request GET http://localhost:8000/reports ^
+  --header "Authorization: Bearer SU_TOKEN_AQUI"
+
+Esto permite consultar el historial visible para el usuario autenticado.
+
+9. COMO CANCELAR UN REPORTE
+
+Si el reporte aun no finalizo y necesita cancelarlo:
+
+curl --request DELETE http://localhost:8000/reports/REPORT_ID ^
+  --header "Authorization: Bearer SU_TOKEN_AQUI"
+
+El sistema marcara la solicitud como cancelada siempre que no haya terminado exitosamente.
+
+10. RECOMENDACIONES DE USO
+
+- No cierre Docker mientras el sistema este levantado.
+- Espere el estado `SUCCESS` antes de intentar descargar.
+- Mantenga seguros los tokens de acceso.
+- Si va a usar el sistema en produccion, cambie todos los secretos del archivo `.env`.
+- Si necesita almacenamiento empresarial, configure un backend S3-compatible.
+
+11. PROBLEMAS COMUNES Y COMO REVISARLOS
+
+Problema: la API no responde
+
+Revise:
+
+- que Docker Desktop este encendido;
+- que `docker compose up --build` siga activo;
+- que el puerto 8000 no este ocupado;
+- que `http://localhost:8000/health` responda.
+
+Problema: el reporte no avanza
+
+Revise:
+
+- que Redis este arriba;
+- que el worker este corriendo;
+- que Flower muestre actividad en `http://localhost:5555`.
+
+Problema: error de autenticacion
+
+Revise:
+
+- que el token haya sido generado correctamente;
+- que el encabezado tenga el formato `Bearer TOKEN`;
+- que no existan espacios o cortes al copiar el token.
+
+Problema: el archivo no descarga
+
+Revise:
+
+- que el estado del reporte sea `SUCCESS`;
+- que el enlace de descarga no haya expirado;
+- que el storage este disponible.
+
+12. COMO DETENER EL SISTEMA
+
+Para detener todos los servicios, presione:
+
+Ctrl + C
+
+Si desea bajar completamente los contenedores:
+
+docker compose down
+
+13. RESUMEN FINAL
+
+Para usar el proyecto correctamente, el cliente debe seguir esta secuencia:
+
+1. copiar `.env.example` a `.env`;
+2. ejecutar `docker compose up --build`;
+3. verificar `http://localhost:8000/health`;
+4. generar un token con `python scripts/create_demo_token.py`;
+5. crear un reporte;
+6. consultar el estado;
+7. obtener el enlace de descarga;
+8. descargar el archivo final.
+
+Con estos pasos el sistema queda operativo y listo para generar reportes de manera segura, ordenada y asincrona.
