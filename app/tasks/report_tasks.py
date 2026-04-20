@@ -11,7 +11,7 @@ from celery import Task
 from app.core.celery_app import celery_app
 from app.core.config import get_settings
 from app.core.database import AsyncSessionLocal
-from app.models.report import ReportFile
+from app.models.report import ReportFile, ReportStatus
 from app.services.report_builder import ReportBuilderService
 from app.services.report_service import ReportService
 from app.services.storage import build_storage_service
@@ -19,6 +19,7 @@ from app.services.storage import build_storage_service
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+MAX_STORAGE_RETRIES = 3
 
 
 class TransientStorageError(RuntimeError):
@@ -29,7 +30,7 @@ class TransientStorageError(RuntimeError):
     bind=True,
     autoretry_for=(TransientStorageError,),
     retry_backoff=True,
-    retry_kwargs={"max_retries": 3},
+    retry_kwargs={"max_retries": MAX_STORAGE_RETRIES},
     name="app.tasks.report_tasks.generate_report_task",
 )
 def generate_report_task(self: Task, report_request_id: str) -> str:
@@ -42,6 +43,8 @@ async def _generate_report(report_request_id: UUID, retry_count: int) -> str:
         report = await service.repository.get_request(report_request_id)
         if not report:
             logger.warning("Report not found", extra={"report_id": str(report_request_id)})
+            return str(report_request_id)
+        if report.status == ReportStatus.canceled:
             return str(report_request_id)
 
         if retry_count > 0:
@@ -67,10 +70,20 @@ async def _generate_report(report_request_id: UUID, retry_count: int) -> str:
                 content_type=generated.content_type,
             )
         except OSError as exc:
-            raise TransientStorageError(str(exc)) from exc
+            if retry_count < MAX_STORAGE_RETRIES:
+                await service.record_processing_retry_attempt(report, attempt, str(exc))
+                raise TransientStorageError(str(exc)) from exc
+            await service.record_processing_failure(report, attempt, str(exc))
+            raise
         except Exception as exc:
             await service.record_processing_failure(report, attempt, str(exc))
             raise
+
+        await asyncio.sleep(0)
+        await service.repository.refresh(report)
+        if report.status == ReportStatus.canceled:
+            await service.record_processing_canceled(report, attempt)
+            return str(report.id)
 
         report_file = ReportFile(
             report_request_id=report.id,

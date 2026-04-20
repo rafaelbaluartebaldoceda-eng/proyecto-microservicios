@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse, RedirectResponse
 
 from app.api.deps import DbSession, get_current_user
@@ -39,12 +39,19 @@ async def create_report(
         await service.mark_enqueued(report, task_id)
         await _generate_report(report.id, retry_count=0)
     else:
-        task = generate_report_task.apply_async(kwargs={"report_request_id": str(report.id)}, task_id=str(report.id))
-        await service.mark_enqueued(report, task.id)
+        try:
+            task = generate_report_task.apply_async(kwargs={"report_request_id": str(report.id)}, task_id=str(report.id))
+            await service.mark_enqueued(report, task.id)
+        except Exception as exc:
+            await service.mark_enqueue_failure(report, str(exc))
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="No se pudo enviar la solicitud a la cola de procesamiento.",
+            ) from exc
     return ReportCreatedResponse(
         report_id=report.id,
         status=report.status,
-        message="Solicitud aceptada y enviada a procesamiento asíncrono.",
+        message="Solicitud aceptada y enviada a procesamiento asincrono.",
     )
 
 

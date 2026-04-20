@@ -66,6 +66,20 @@ class ReportService:
         await self.repository.refresh(report)
         return report
 
+    async def mark_enqueue_failure(self, report: ReportRequest, error_message: str) -> ReportRequest:
+        report.status = ReportStatus.failure
+        report.error_message = error_message
+        report.completed_at = datetime.now(UTC)
+        await self.repository.add_event(
+            report.id,
+            ReportEventType.failed,
+            "La solicitud no pudo enviarse a la cola de procesamiento.",
+            {"error": error_message},
+        )
+        await self.repository.save()
+        await self.repository.refresh(report)
+        return report
+
     async def get_report(self, report_id: UUID, user: AuthenticatedUser) -> ReportRequest:
         report = await self.repository.get_request(report_id)
         if not report:
@@ -192,6 +206,32 @@ class ReportService:
             {"reason": error_message},
         )
         await self.repository.save()
+
+    async def record_processing_retry_attempt(
+        self,
+        report: ReportRequest,
+        attempt: TaskAttempt,
+        error_message: str,
+    ) -> None:
+        report.status = ReportStatus.retry
+        report.error_message = error_message
+        attempt.status = ReportStatus.retry
+        attempt.ended_at = datetime.now(UTC)
+        attempt.error_message = error_message
+        await self.repository.add_event(
+            report.id,
+            ReportEventType.retried,
+            "Se programo un reintento automatico.",
+            {"reason": error_message},
+        )
+        await self.repository.save()
+
+    async def record_processing_canceled(self, report: ReportRequest, attempt: TaskAttempt) -> ReportRequest:
+        attempt.status = ReportStatus.canceled
+        attempt.ended_at = datetime.now(UTC)
+        await self.repository.save()
+        await self.repository.refresh(report)
+        return report
 
     async def record_processing_success(
         self,
