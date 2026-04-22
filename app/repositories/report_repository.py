@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from datetime import UTC, datetime
+
+from sqlalchemy import Select, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -73,6 +75,9 @@ class ReportRepository:
         offset: int = 0,
     ) -> tuple[int, list[ReportRequest]]:
         filters = []
+        now = datetime.now(UTC)
+        filters.append(ReportRequest.deleted_at.is_(None))
+        filters.append(or_(ReportRequest.expires_at.is_(None), ReportRequest.expires_at > now))
         if user_id:
             filters.append(ReportRequest.user_id == user_id)
         if report_type:

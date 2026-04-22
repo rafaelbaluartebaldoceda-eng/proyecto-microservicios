@@ -117,17 +117,23 @@ async def download_report(
 
     service.validate_download_token(token, report)
     storage = build_storage_service()
+    if not report.file or not storage.exists(report.file.storage_path):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="El archivo del reporte no esta disponible en storage.",
+        )
     presigned_url = storage.create_presigned_download_url(report.file.storage_path, expires_in=300) if report.file else None
-    await service.register_download_event(report.id, user.user_id, phase="completed")
     if presigned_url:
         return RedirectResponse(presigned_url, status_code=status.HTTP_307_TEMPORARY_REDIRECT)
 
     if not isinstance(storage, LocalStorageService):
         return Response(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR)
     local_path = storage.base_path / report.file.storage_path
-    response.headers["X-Report-ID"] = str(report.id)
-    return FileResponse(
+    await service.register_download_event(report.id, user.user_id, phase="completed")
+    file_response = FileResponse(
         path=local_path,
         media_type=report.file.file_type,
         filename=report.file.file_name,
     )
+    file_response.headers["X-Report-ID"] = str(report.id)
+    return file_response

@@ -85,6 +85,7 @@ class ReportService:
         if not report:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Reporte no encontrado.")
         self._ensure_report_visibility(report, user)
+        await self._expire_report_if_needed(report)
         return report
 
     async def list_reports(
@@ -107,7 +108,7 @@ class ReportService:
 
     async def cancel_report(self, report_id: UUID, user: AuthenticatedUser) -> ReportRequest:
         report = await self.get_report(report_id, user)
-        if report.status == ReportStatus.success:
+        if report.status in {ReportStatus.success, ReportStatus.failure}:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
                 detail="No se puede cancelar un reporte finalizado.",
@@ -174,6 +175,23 @@ class ReportService:
         message = "Descarga solicitada." if phase == "requested" else "Descarga completada."
         await self.repository.add_event(report_id, event_type, message, {"user_id": user_id})
         await self.repository.save()
+
+    async def _expire_report_if_needed(self, report: ReportRequest) -> None:
+        if report.deleted_at is not None:
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="El reporte ya no esta disponible porque supero su periodo de retencion.",
+            )
+        expires_at = report.expires_at
+        if expires_at and expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=UTC)
+        if expires_at and expires_at <= datetime.now(UTC):
+            report.deleted_at = datetime.now(UTC)
+            await self.repository.save()
+            raise HTTPException(
+                status_code=status.HTTP_410_GONE,
+                detail="El reporte ya no esta disponible porque supero su periodo de retencion.",
+            )
 
     async def record_processing_started(self, report: ReportRequest) -> TaskAttempt:
         attempt_number = await self.repository.count_attempts(report.id) + 1

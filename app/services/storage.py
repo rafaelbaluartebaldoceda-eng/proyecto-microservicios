@@ -23,6 +23,8 @@ class StorageService(Protocol):
 
     def open_bytes(self, storage_path: str) -> bytes: ...
 
+    def exists(self, storage_path: str) -> bool: ...
+
     def create_presigned_download_url(self, storage_path: str, expires_in: int) -> str | None: ...
 
 
@@ -39,6 +41,9 @@ class LocalStorageService:
 
     def open_bytes(self, storage_path: str) -> bytes:
         return (self.base_path / storage_path).read_bytes()
+
+    def exists(self, storage_path: str) -> bool:
+        return (self.base_path / storage_path).is_file()
 
     def create_presigned_download_url(self, storage_path: str, expires_in: int) -> str | None:
         return None
@@ -63,6 +68,13 @@ class S3StorageService:
         stream = io.BytesIO()
         self.client.download_fileobj(self.bucket_name, storage_path, stream)
         return stream.getvalue()
+
+    def exists(self, storage_path: str) -> bool:
+        try:
+            self.client.head_object(Bucket=self.bucket_name, Key=storage_path)
+        except Exception:
+            return False
+        return True
 
     def create_presigned_download_url(self, storage_path: str, expires_in: int) -> str | None:
         return self.client.generate_presigned_url(
