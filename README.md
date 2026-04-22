@@ -12,9 +12,10 @@ El proyecto se encuentra implementado con una base funcional completa para entor
 - Generacion real de archivos Excel y PDF.
 - Control de acceso mediante JWT y autorizacion por roles.
 - Descarga protegida con enlaces firmados.
+- Retencion aplicada sobre consultas y listados de reportes vencidos.
 - Monitoreo operativo con Flower.
 - Contenerizacion con Docker y orquestacion local con Docker Compose.
-- Cobertura automatizada de los flujos principales con pytest.
+- Cobertura automatizada de flujos principales y casos borde con pytest.
 
 ## Objetivo del sistema
 
@@ -65,7 +66,15 @@ El proyecto no recibe en esta version una fuente corporativa externa ya definida
 - Autorizacion por roles para restringir que tipo de reportes puede generar cada usuario.
 - Visibilidad por propietario o administrador.
 - Descargas protegidas con token firmado y expiracion.
+- Validacion de acceso previa a reglas de expiracion para evitar fuga de existencia de recursos ajenos.
 - Registro de eventos de auditoria para solicitudes, procesamiento y descargas.
+
+### Retencion y ciclo de vida
+
+- Cada solicitud calcula `expires_at` al momento de creacion.
+- Los reportes vencidos dejan de estar disponibles en detalle y descarga.
+- Los listados excluyen reportes vencidos sin requerir una consulta previa del detalle.
+- El servicio responde `410 Gone` cuando un usuario autorizado intenta acceder a un reporte ya vencido.
 
 ### Observabilidad y operacion
 
@@ -109,6 +118,18 @@ La solucion sigue una arquitectura por capas:
 8. El sistema actualiza el estado final y los metadatos.
 9. El cliente consulta el estado y obtiene una URL firmada para la descarga.
 
+## Comportamiento de descarga
+
+El endpoint `GET /reports/{report_id}/download` trabaja en dos fases:
+
+1. Sin `token`, genera una URL interna firmada con expiracion corta.
+2. Con `token`, valida autorizacion, vigencia del reporte y existencia real del archivo antes de entregarlo.
+
+Comportamiento segun backend de storage:
+
+- `local`: el servicio entrega el archivo directamente y registra la descarga completada.
+- `s3`: el servicio valida existencia y responde con redireccion `307` a una URL presignada; en este caso no marca una descarga completada que no controla directamente.
+
 ## Modelo de datos
 
 El proyecto implementa las siguientes entidades principales:
@@ -134,7 +155,7 @@ Devuelve el detalle de una solicitud, su estado, eventos, intentos y archivo aso
 
 ### `GET /reports`
 
-Lista solicitudes segun permisos del usuario autenticado, con filtros y paginacion basica.
+Lista solicitudes segun permisos del usuario autenticado, con filtros, paginacion basica y exclusion de reportes vencidos.
 
 ### `DELETE /reports/{report_id}`
 
@@ -148,7 +169,7 @@ Primer paso:
 
 Segundo paso:
 
-- con el token firmado, entrega el archivo local o redirige a una URL presignada de storage.
+- con el token firmado, entrega el archivo local o redirige a una URL presignada de storage despues de validar existencia del objeto.
 
 ### `GET /health`
 
@@ -274,7 +295,17 @@ El proyecto incluye pruebas automatizadas sobre:
 - generacion de reportes Excel;
 - generacion de reportes PDF;
 - flujo principal de creacion, consulta y descarga;
-- listado de solicitudes.
+- listado de solicitudes;
+- fallo de encolado en Celery;
+- reintentos y fallo final por storage;
+- cancelacion concurrente;
+- retencion y ocultamiento de reportes vencidos;
+- descarga local con encabezados esperados;
+- semantica de descarga mediante redirect para storage S3.
+
+Estado de validacion actual:
+
+- `13 passed` en la suite principal.
 
 Ejecucion:
 
@@ -290,6 +321,7 @@ pytest -q
 - PostgreSQL debe ser el origen persistente de estados y auditoria.
 - Flower debe exponerse solo en redes internas o protegidas.
 - Las claves JWT y secretos de descarga deben administrarse mediante secretos seguros del entorno.
+- Para entornos productivos conviene complementar `create_all()` con migraciones formales de base de datos.
 
 ## Documentacion para cliente
 
@@ -303,7 +335,7 @@ Mejoras naturales para siguientes iteraciones:
 
 - conectar fuentes de datos reales;
 - agregar plantillas corporativas avanzadas por tipo de reporte;
-- incorporar limpieza automatica por politicas de retencion;
+- incorporar limpieza fisica automatica de archivos vencidos por politicas de retencion;
 - ampliar metricas y alertas;
 - agregar versionado de plantillas y trazabilidad de dataset origen.
 
